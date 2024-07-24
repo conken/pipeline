@@ -33,6 +33,14 @@
             }
         },
         {
+            "step": "cti_corr",
+            "run": true,
+            "suffix": "02c",
+            "args": {
+                "verbose": true
+            }
+        },
+        {
             "step": "superflat",
             "run": true,
             "suffix": null,
@@ -148,7 +156,7 @@
             "suffix": "04",
             "args": {
                 "ns": true,
-                "multithread": false,
+                "multithread": true,
                 "max_processes": -1
             }
         },

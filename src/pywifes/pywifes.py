@@ -5,7 +5,7 @@ import astropy.units as u
 import gc
 import logging
 import matplotlib.pyplot as plt
-from matplotlib import colormaps as cm
+from matplotlib import colormaps as cm, colors
 import numpy
 import os
 import pickle
@@ -181,7 +181,7 @@ def imcombine(inimg_list, outimg, method="median", nonzero_thresh=100., scale=No
             f = pyfits.open(inimg_list[i])
             new_data = f[data_hdu].data
             exptime_list.append(f[data_hdu].header["EXPTIME"])
-            if f[data_hdu].header["IMAGETYP"].upper() in ["BIAS", "FLAT", "ARC", "WIRE"]:
+            if f[data_hdu].header["IMAGETYP"].upper() in ["ARC", "BIAS", "FLAT", "SKYFLAT", "WIRE", "ZERO"]:
                 airmass_list.append(1.0)
             else:
                 try:
@@ -318,7 +318,8 @@ def imcombine_mef(
         for i in range(nimg):
             f2 = pyfits.getheader(inimg_list[i], ext=1)
             try:
-                airmass_list.append(f2["AIRMASS"])
+                if "AIRMASS" in f2:
+                    airmass_list.append(f2["AIRMASS"])
             except:
                 pass
             exptime_list.append(f2["EXPTIME"])
@@ -1149,7 +1150,7 @@ def repair_blue_bad_pix(inimg, outimg, data_hdu=0, bin_x=1, bin_y=1, interactive
     y_veryfirst, y_verylast = [int(pix) - 1 for pix in detsec.split(",")[1].rstrip(']').split(":")]
 
     # bad_data = [[yfirst, ylast, xfirst, xlast], [...]]
-    # Uses unbinned, 0-indexed pixels after overscan trimming, e.g., p00.fits
+    # Uses unbinned, full-frame, 0-indexed pixels after overscan trimming, e.g., p00.fits
     # Limits are inclusive of the bad pixels on both ends of range
     bad_data = [[746, 4095, 1525, 1531],
                 [2693, 3104, 3944, 3944],
@@ -1215,10 +1216,10 @@ def repair_red_bad_pix(inimg, outimg, data_hdu=0, bin_x=1, bin_y=1, interactive_
     y_veryfirst, y_verylast = [int(pix) - 1 for pix in detsec.split(",")[1].rstrip(']').split(":")]
 
     # bad_data = [[yfirst, ylast, xfirst, xlast], [...]]
-    # Uses unbinned, 0-indexed pixels after overscan trimming, e.g., p00.fits
+    # Uses unbinned, full-frame, 0-indexed pixels after overscan trimming, e.g., p00.fits
     # Limits are inclusive of the bad pixels on both ends of range
-    bad_data = [[0, 2707, 10, 10],
-                [0, 3280, 774, 775],
+    bad_data = [[0, 2707, 9, 11],
+                [0, 3280, 773, 775],
                 [0, 4095, 901, 904],
                 [3978, 3986, 897, 906],
                 [0, 3387, 939, 939],
@@ -1759,6 +1760,103 @@ def generate_wifes_bias_fit(
     return
 
 
+# Correct for CTI
+def correct_cti(
+        input_fn,
+        output_fn,
+        data_hdu=0,
+        verbose=True,
+        debug=True,
+):
+    """Correct for charge transfer inefficiency with simple one-iteration shift.
+    Amplitude array can be expanded to multiple pixels if the correction is well
+    known.
+    """
+    if debug:
+        print(arguments())
+
+    # CTI params
+    # 'corr_dir' is the direction electrons need to be moved in that axis to be corrected
+    cti_param = {'blue': {'parallel': {'corr_dir': -1,
+                                       'amplitude': numpy.array([0.00025])},  # BINNED ESTIMATE
+                          'serial': {'corr_dir': +1,
+                                     'amplitude': numpy.array([0.000625, 0.000525, 0.000375, 0.000275, 0.00025, 0.00025, 0.000225, 0.000125, 0.000125])}},
+                 'red': {'parallel': {'corr_dir': +1,
+                                      'amplitude': numpy.array([0.00015])},  # BINNED ESTIMATE
+                         'serial': {'corr_dir': +1,
+                                    'amplitude': numpy.array([0.00065, 0.00035, 0.00025, 0.00025, 0.00015, 0.00015, 0.00015, 0.00015, 0.00015])}}}
+    f = pyfits.open(input_fn)
+    orig_data = f[data_hdu].data
+    orig_hdr = f[data_hdu].header
+    ny, nx = orig_data.shape
+
+    if orig_hdr["CAMERA"] == "WiFeSBlue":
+        cti = cti_param['blue']
+    else:
+        cti = cti_param['red']
+    try:
+        bin_x, bin_y = [int(b) for b in orig_hdr["CCDSUM"].split()]
+    except:
+        bin_x = 1
+        bin_y = 1
+
+    if bin_x > 1:
+        xamplitude = numpy.zeros(numpy.ceil(cti['serial']['amplitude'].shape[0] / float(bin_x)))
+        for ii in range(cti['serial']['amplitude'].shape[0]):
+            for bx in range(bin_x):
+                xamplitude[ii // bin_x] += numpy.pad(cti['serial']['amplitude'], pad_width=(0, bin_x), mode='constant')[ii + bx] / float(bin_x)
+    else:
+        xamplitude = cti['serial']['amplitude']
+    if bin_y > 2:  # CAO: because the corrections are based on bin_y=2 darks, but hope to change
+        yamplitude = numpy.zeros(int(numpy.ceil(cti['parallel']['amplitude'].shape[0] / float(bin_y / 2.))))  # CAO: scaled to bin_y=2
+        for ii in range(cti['parallel']['amplitude'].shape[0]):
+            for by in range(numpy.ceil(float(bin_y) / 2.)):  # CAO: scaled to bin_y=2
+                yamplitude[ii // (float(bin_y) / 2.)] += numpy.pad(cti['parallel']['amplitude'], pad_width=(0, bin_y), mode='constant')[ii + by] / float(bin_y / 2.)  # CAO: scaled to bin_y = 2
+    else:
+        yamplitude = cti['parallel']['amplitude']
+
+    if verbose:
+        print(f"X: {xamplitude}")
+        print(f"Y: {yamplitude}")
+
+    for row in numpy.arange(ny)[::cti['parallel']['corr_dir']][:-1]:
+        for col in numpy.arange(nx)[::cti['serial']['corr_dir']][:-1]:
+            colmin = min(col + 1, max(0, col + xamplitude.shape[0] * cti['serial']['corr_dir']))
+            colmax = max(col, min(nx, col + (xamplitude.shape[0] + 1) * cti['serial']['corr_dir']))
+            amplmin = 0
+            amplmax = min(xamplitude.shape[0], nx - col - 1 if cti['serial']['corr_dir'] > 0 else col - 1)
+            estolen = orig_data[row, colmin:colmax][::cti['serial']['corr_dir']] / ((1. / xamplitude[amplmin:amplmax]) - 1.)
+            orig_data[row, col] -= numpy.nansum(estolen)
+            orig_data[row, colmin:colmax] += estolen[::cti['serial']['corr_dir']]
+            # Looping through amplitudes array is slower
+            #for i, ampl in enumerate(xamplitude):
+            #    if (col + (i + 1) * cti['serial']['corr_dir'] < 0
+            #            or col + (i + 1) * cti['serial']['corr_dir'] >= nx):
+            #        continue
+            #    estolen = orig_data[row, col + (i + 1) * cti['serial']['corr_dir']] / ((1. / ampl) - 1.)
+            #    orig_data[row, col] -= estolen
+            #    orig_data[row, col + (i + 1) * cti['serial']['corr_dir']] += estolen
+        for i, ampl in enumerate(yamplitude):
+            if (row + (i + 1) * cti['parallel']['corr_dir'] < 0
+                    or row + (i + 1) * cti['parallel']['corr_dir'] >= ny):
+                continue
+            estolen = orig_data[row + (i + 1) * cti['parallel']['corr_dir']] / ((1. / ampl) - 1)
+            orig_data[row] -= estolen
+            orig_data[row + (i + 1) * cti['parallel']['corr_dir']] += estolen
+
+    # ----------------------------------------------------
+    # save it!
+    outfits = pyfits.HDUList(f)
+    outfits[data_hdu].data = orig_data.astype("float32", casting="same_kind")
+    outfits[data_hdu].scale("float32")
+    outfits[data_hdu].header.set("PYWIFES", __version__, "PyWiFeS version")
+    outfits[data_hdu].header.set("PYWCTIXL", int(numpy.ceil(numpy.size(cti['serial']['amplitude']) / float(bin_x))), "PyWiFeS: extent of CTI correction in (binned) x-axis pixels")
+    outfits[data_hdu].header.set("PYWCTIYL", int(numpy.ceil(numpy.size(cti['parallel']['amplitude']) / float(bin_y))), "PyWiFeS: extent of CTI correction in (binned) y-axis pixels")
+    outfits.writeto(output_fn, overwrite=True)
+    f.close()
+    return
+
+
 # ------------------------------------------------------------------------
 # WIFES specific tasks
 def derive_slitlet_profiles(
@@ -1766,8 +1864,9 @@ def derive_slitlet_profiles(
     output_fn,
     data_hdu=0,
     verbose=True,
+    buffer=1,
     shift_global=True,
-    interactive_plot=False,
+    interactive_plot=True,
     bin_x=None,
     bin_y=None,
     debug=False,
@@ -1803,9 +1902,9 @@ def derive_slitlet_profiles(
     y_shift_vals = []
     if halfframe:
         if is_taros(flatfield_fn):
-            nslits = 12
+            nslits = 13  # Only using 12, but need slit definitions for half-slit in interslice cleanup
             first_slit = 1
-            offset = 2048 // bin_y
+            offset = 2056 // bin_y
         else:
             nslits = 13
             first_slit = 7
@@ -1841,18 +1940,19 @@ def derive_slitlet_profiles(
 
         # center = halfway between edges where it drops below 10 percent of peak
         bright_inds = numpy.nonzero(y_prof > 0.1)[0]
-        new_ymin = bright_inds[0] - 1
-        new_ymax = bright_inds[-1] + 1
+        new_ymin = bright_inds[0] - 1 - buffer
+        new_ymax = bright_inds[-1] + 1 + buffer
         orig_ctr = 0.5 * float(len(y_prof))
         new_ctr = 0.5 * (new_ymin + new_ymax)
+        # now adjust the slitlet definitions!
+        y_shift = bin_y * int(new_ctr - orig_ctr)
         if interactive_plot:
             plt.figure()
             plt.plot(y_prof, color="b")
             plt.axvline(orig_ctr, color="r")
             plt.axvline(new_ctr, color="g")
+            plt.title(f"Slitlet {i}")
             plt.show()
-        # now adjust the slitlet definitions!
-        y_shift = bin_y * int(new_ctr - orig_ctr)
         if verbose:
             print(
                 "Fitted shift of %d (unbinned) pixels for slitlet %d" % (y_shift, i)
@@ -1865,6 +1965,9 @@ def derive_slitlet_profiles(
             init_curr_defs[3] + y_shift,
         ]
         new_slitlet_defs[str(i)] = final_defs
+    if interactive_plot:
+        plt.imshow(flat_data, norm=colors.LogNorm(), origin="lower")
+        # More elements added in loop below
     # finally, use a single global shift if requested
     if shift_global:
         best_shift = int(numpy.nanmean(numpy.array(y_shift_vals)))
@@ -1882,6 +1985,11 @@ def derive_slitlet_profiles(
             final_slitlet_defs[str(i)] = final_defs
     else:
         final_slitlet_defs = new_slitlet_defs
+    if interactive_plot:
+        for i in range(first_slit, first_slit + nslits):
+            plt.axhline(final_slitlet_defs[str(i)][2] // bin_y - offset, color="k")
+            plt.axhline(final_slitlet_defs[str(i)][3] // bin_y - offset, color="k")
+        plt.show()
     # save it!
     f3 = open(output_fn, "wb")
     pickle.dump(final_slitlet_defs, f3)
@@ -1967,7 +2075,7 @@ def interslice_cleanup(
     # unbinned pixels.
     if halfframe:
         if taros:
-            nslits = 12
+            nslits = 13  # only keeping 12 but want the definitions for the half-slit
             first_slit = 1
             frame_offset = 2056
         else:
@@ -4037,17 +4145,23 @@ def generate_wifes_cube_multithread(
 
 
 # ------------------------------------------------------------------------
-def generate_wifes_3dcube(inimg, outimg, halfframe, debug=False):
+def generate_wifes_3dcube(inimg, outimg, halfframe, taros, debug=False):
     # load in data
     # assumes it is in pywifes format
     # otherwise why are you using this function
     if debug:
         print(arguments())
     f = pyfits.open(inimg)
-    if len(f) == 76 or len(f) == 40:  # full frame or half
+    # full frame or half
+    if len(f) == 76 or (
+        halfframe and (
+            (taros and len(f) == 37)
+            or (not taros and len(f) == 40)
+        )
+    ):
         ny, nlam = numpy.shape(f[1].data)
         if halfframe:
-            if is_taros(inimg):
+            if taros:
                 nx = 12
             else:
                 nx = 13

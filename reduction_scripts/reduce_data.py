@@ -389,6 +389,24 @@ def main():
         return
 
     # ------------------------------------------------------
+    # Correct for Charge Transfer Inefficiency
+    # ------------------------------------------------------
+    def run_cti_corr(metadata, prev_suffix, curr_suffix, **args):
+        full_obs_list = get_full_obs_list(metadata)
+        for basename in full_obs_list:
+            input_filename = f"{basename}.p{prev_suffix}.fits"
+            output_filename = f"{basename}.p{curr_suffix}.fits"
+            input_filepath = os.path.join(out_dir, input_filename)
+            output_filepath = os.path.join(out_dir, output_filename)
+            if skip_done and os.path.isfile(output_filepath) \
+                    and os.path.getmtime(input_filepath) < os.path.getmtime(output_filepath):
+                continue
+            info_print(f"Correcting for CTI in {input_filename}")
+            pywifes.correct_cti(
+                input_filepath, output_filepath, data_hdu=my_data_hdu, **args,
+            )
+
+    # ------------------------------------------------------
     # Generate super-flat
     # ------------------------------------------------------
     def run_superflat(
@@ -650,7 +668,7 @@ def main():
     # ------------------------------------------------------
     # Wire solution
     # ------------------------------------------------------
-    def run_wire_soln(metadata, prev_suffix, curr_suffix):
+    def run_wire_soln(metadata, prev_suffix, curr_suffix, **args):
         '''
         Global wire solution first, then local wire solutions for any specific observations.
         '''
@@ -664,7 +682,7 @@ def main():
         if not (skip_done and os.path.isfile(wire_out_fn)
                 and os.path.getmtime(wire_in_fn) < os.path.getmtime(wire_out_fn)):
             info_print(f"Deriving global wire solution from {os.path.basename(wire_in_fn)}")
-            pywifes.derive_wifes_wire_solution(wire_in_fn, wire_out_fn)
+            pywifes.derive_wifes_wire_solution(wire_in_fn, wire_out_fn, plot_dir=plot_dir_arm, **args)
 
         # Wire solutions for any specific obsevations
         sci_obs_list = get_sci_obs_list(metadata)
@@ -684,7 +702,7 @@ def main():
                         and os.path.getmtime(local_wire_fn) < os.path.getmtime(local_wire_out_fn):
                     continue
                 info_print(f"Deriving local wire solution for {local_wires[0]}")
-                pywifes.derive_wifes_wire_solution(local_wire_fn, local_wire_out_fn)
+                pywifes.derive_wifes_wire_solution(local_wire_fn, local_wire_out_fn, plot_dir=plot_dir_arm, **args)
         return
 
     # ------------------------------------------------------
@@ -1203,6 +1221,7 @@ def main():
         sci_filename = temp_data_dir + sci_obs_list[0] + ".fits"
 
         halfframe = is_halfframe(sci_filename)
+        taros = is_taros(sci_filename)
         # now generate cubes
 
         for fn in sci_obs_list + std_obs_list:
@@ -1222,7 +1241,7 @@ def main():
             ):
                 continue
             info_print(f"Saving 3D Data Cube for {os.path.basename(in_fn)}")
-            pywifes.generate_wifes_3dcube(in_fn, out_fn, halfframe=halfframe, **args)
+            pywifes.generate_wifes_3dcube(in_fn, out_fn, halfframe=halfframe, taros=taros, **args)
         return
 
     # --------------------------------------------
