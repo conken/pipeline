@@ -1,8 +1,12 @@
 import os
 from pywifes import pywifes
-from pywifes.wifes_utils import * 
 from pywifes import wifes_calib
+from pywifes.wifes_utils import get_primary_sci_obs_list, get_primary_std_obs_list, wifes_recipe
 
+
+# ------------------------------------------------------
+# Apply telluric correction
+# ------------------------------------------------------
 @wifes_recipe
 def _run_telluric_corr(metadata, gargs, prev_suffix, curr_suffix, **args):
     """
@@ -50,6 +54,6 @@ def _run_telluric_corr(metadata, gargs, prev_suffix, curr_suffix, **args):
         if gargs['skip_done'] and os.path.isfile(out_fn) \
                 and os.path.getmtime(in_fn) < os.path.getmtime(out_fn):
             continue
-        info_print(f"Correcting telluric in {os.path.basename(in_fn)}")
+        print(f"Correcting telluric in {os.path.basename(in_fn)}")
         wifes_calib.apply_wifes_telluric(in_fn, out_fn, this_tellcorr_fn, **args)
     return
