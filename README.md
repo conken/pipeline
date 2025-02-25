@@ -6,22 +6,25 @@ The automated Python data reduction pipeline for WiFeS.
 
 Forked from PyWiFeS/pipeline [commit 45c69d8] in July 2024, and updated to include PyWiFeS/pipeline updates to 7 Aug 2024 [commit f6a2d8c].
 
-What's been done [20241114]:
+What's been done [20250115]:
 
-- all command-line arguments now use double-dash
+- new NeAr and CuAr line list from NIST (Ritz wavelengths in air)
 
-- new `--reduce-both` option to reduce arms simultaneously
+- option to output datacubes in vacuum wavelengths instead of air
 
+- propagate various calibration keywords into science data
+
+- clean up logging
+
+- update method of standard star association with observations
 
 ***Future Development Underway***
 
-- make arc lamp reference wavelengths consistent between gratings
+- allow retention of applied telluric model for user-rescaling
 
 - explore improving fitting and removal of fringing
 
 - fit and remove scattered light from standard stars and other on-sky observations
-
-- add option for PSF-based source extraction
 
 - add time domain to the bad pixel mask
 
@@ -39,7 +42,13 @@ A note on charge transfer inefficiency (CTI): test data shows CTI of ~0.1%. Cons
 
 ### Previously ###
 
-What's been done [20241023]:
+What's been done [20241114]:
+
+- all command-line arguments now use double-dash
+
+- new `--reduce-both` option to reduce arms simultaneously
+
+[20241023]:
 
 - check for mixtures of gratings and beamsplitters (which can alter slitlet locations on CCD) and warn users
 
@@ -227,7 +236,7 @@ For more information, we refer the users to the [**PyWiFeS User Manual**](https:
 ## Installation
 1. Download or clone this fork of the `pipeline` repository in the `automation` branch:
     ```sh
-   git clone -b automation https://github.com/conken/pipeline.git
+   git clone -b automation https://github.com/PyWiFeS/pipeline.git
    ```
 2. Set up a python environment (via conda, for example) with:
 
@@ -277,6 +286,14 @@ To specify the reduction steps for blue and red data other than the defaults, us
     pywifes-reduce my_raw_data --red-params /.../user_red_param_file.json5 --blue-params /.../user_blue_param_file.json5
 
 
+**Reduce Both Arms in Parallel**
+
+Processing may be sped up by processing both arms simultaneously. Obviously, this entails utilising more of the machine's resources. To enable, use the `--run-both` flag as follows:
+
+    
+    pywifes-reduce --run-both my_raw_data
+
+    
 **Reduce Data Using Master Calibration Files**
 
 To perform data reduction using master calibration files from previous reductions, use the `--from-master` flag along with the path to the directory containing all calibration files. Both blue and red data should be stored together in the same directory for coherence. If no path is specified after the `--from-master` flag, the default directory `./data_products/master_calib` is assumed.
@@ -329,7 +346,7 @@ The sky annulus is hard-coded to extend from 3 to 4 times the JSON5-specified so
 When multiprocessing is enabled, the pipeline *may* do the job faster. This will depend on the operative system used to run the pipeline. The multiprocessing setup is recommended for **Linux** users, as they will see a significant improvement in the computation time. On the other side, Mac OS users might get a similar running time (or just slightly faster) than in one-process mode. 
 To enable the multithreading option, please follow these steps:
 
-1. Open the `.json` file that corresponds to your grating. That is, `reduction_scripts/pipeline_parms/params_<grating>.json`.
+1. Open the `.json5` file that corresponds to your grating. That is, `reduction_scripts/pipeline_parms/params_<grating>.json5`.
 2. Set `"multithread": true` in all the cases. There should be a total of 6 `"multithread"`, 3 for each of the blue and red arms in the following steps: `"step": "wave_soln"`, `"step": "cosmic_rays"`, and `"step": "cube_gen"`.
 3. [Optional] Set `max_processes` to the *maximum* number of sub-processes you would like to launch for `"step": "cosmic_rays"`, and `"step": "cube_gen"`. If `-1`, the pipeline will use as many processes as there are hardware & logical cores on your device, which may be larger than the number of *available* cores, e.g. for Slurm users. Limiting the number of sub-processes can improve the efficiency and availability of your device.
 4. Run the pipeline following the instructions above.
