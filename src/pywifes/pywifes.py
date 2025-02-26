@@ -3,7 +3,6 @@ from astropy.coordinates import SkyCoord
 from astropy.io import fits as pyfits
 import astropy.units as u
 import gc
-import logging
 from matplotlib import colormaps as cm, colors
 import matplotlib.gridspec as gridspec
 import matplotlib.pyplot as plt
@@ -16,8 +15,6 @@ import scipy.ndimage as ndimage
 import scipy.signal as signal
 import sys
 
-from pywifes.logger_config import custom_print
-
 # Pipeline imports
 from pywifes.multiprocessing_utils import get_task, map_tasks
 from pywifes.wifes_metadata import __version__, metadata_dir
@@ -26,13 +23,6 @@ from pywifes.wifes_wsol import fit_wsol_poly, evaluate_wsol_poly
 from pywifes.wifes_adr import ha_degrees, dec_dms2dd, adr_x_y
 from pywifes.wifes_utils import arguments, fits_scale_from_bitpix, is_halfframe, is_taros, nan_helper
 from pywifes.mpfit import mpfit
-
-# Redirect print statements to logger
-logger = logging.getLogger("PyWiFeS")
-print = custom_print(logger)
-
-# Set up warning redirection
-logging.captureWarnings(True)
 
 # ------------------------------------------------------------------------
 # NEED TO OPEN / ACCESS WIFES METADATA FILE!!
@@ -44,7 +34,7 @@ try:
         wifes_metadata = pickle.load(f0)  # fix_imports doesn't work in python 2.7.
     f0.close()
 except Exception as e:
-    logger.error(f"Failed to open or load wifes_metadata: {e}")
+    print(f"Failed to open or load wifes_metadata: {e}")
     raise
 
 blue_slitlet_defs = wifes_metadata["blue_slitlet_defs"]
@@ -361,7 +351,7 @@ def imcombine(inimg_list, outimg, method="median", nonzero_thresh=100., scale=No
                         try:
                             airmass_list.append(f[data_hdu].header["AIRMASS"])
                         except Exception as air_err:
-                            logger.warning(
+                            print(
                                 f"Failed to get airmass for {f[data_hdu].header['IMAGETYP'].upper()} image {inimg_list[i]}: {air_err}"
                             )
                             airmass_list.append(1.0)
@@ -412,7 +402,7 @@ def imcombine(inimg_list, outimg, method="median", nonzero_thresh=100., scale=No
                 var_arr[:, xmin:xmax] = numpy.nanvar(coadd_arr, axis=2, dtype="float64")
 
     except Exception as e:
-        logger.error(f"An error occurred in imcombine: {str(e)}")
+        print(f"An error occurred in imcombine: {str(e)}")
         raise
     outfits[data_hdu].data = coadd_data.astype("float32", casting="same_kind")
     outfits[data_hdu].scale("float32")
@@ -1395,7 +1385,10 @@ def subtract_overscan(
                 plt.show()
             high_rows = (meancounts - numpy.nanmin(meancounts) > omask_threshold)
             nrows_high = numpy.count_nonzero(high_rows)
-            if nrows_high > 0:
+            if nrows_high > 0.5 * ovs_y:
+                print(f"WARNING: Likely light leak in {inimg}. Not masking high rows in overscan.")
+                omaskfile = None
+            elif nrows_high > 0:
                 masked_ovs_data = numpy.nanmedian(curr_ovs_data, axis=1)[numpy.nonzero(curr_omask * ~high_rows)]
                 masked_ovs_rows = numpy.arange(ovs_y)[numpy.nonzero(curr_omask * ~high_rows)]
                 ch_coeff = numpy.polynomial.chebyshev.chebfit(x=masked_ovs_rows, y=masked_ovs_data.T, deg=7)
@@ -1807,7 +1800,8 @@ def fit_wifes_interslit_bias(
                     plt.ylabel("Number")
                     plt.title(f"Slitlet {i + first}")
                     plt.show()
-                row_med[i] = numpy.nanmean(curr_col[good_inds])
+                if good_inds.size > 0:
+                    row_med[i] = numpy.nanmean(curr_col[good_inds])
             # row_med = numpy.nanmedian(curr_data, axis=0)
             bias_sub = row_med ** numpy.ones(numpy.shape(curr_data), dtype="d")
             out_data[reg[0]:reg[1] + 1, reg[2]:reg[3] + 1] = bias_sub
@@ -2035,7 +2029,8 @@ def generate_wifes_bias_fit(
                 curr_col = curr_data[:, i]
                 curr_med = numpy.nanmedian(curr_col)
                 good_inds = numpy.nonzero(numpy.abs(curr_col - curr_med) < 20.0)[0]
-                row_med[i] = numpy.nanmean(curr_col[good_inds])
+                if good_inds.size > 0:
+                    row_med[i] = numpy.nanmean(curr_col[good_inds])
             bias_sub = row_med ** numpy.ones(numpy.shape(curr_data), dtype="float32")
             # 's update (bias fit) ------
             # To remove the variations (some at least) along the
@@ -3708,6 +3703,11 @@ def wifes_SG_response(
     except:
         print("Could not retrieve number of input dome flats from header, defaulting to 1")
         nflat = 1.0
+    try:
+        ntflat = float(f2[0].header["PYWTWIN"])
+    except:
+        print("Could not retrieve number of input twi flats from header, defaulting to 1")
+        ntflat = 1.0
 
     outfits = pyfits.HDUList(f1)
     pixel_response = numpy.ones((nslits, ndy, ndx))
@@ -3815,6 +3815,7 @@ def wifes_SG_response(
 
     outfits[0].header.set("PYWIFES", __version__, "PyWiFeS version")
     outfits[0].header.set("PYWRESIN", "dome+twi", "PyWiFeS: flatfield inputs")
+    outfits[0].header.set("PYWTWIN", ntflat, "PyWiFeS: number of twilight flat images combined")
     outfits[0].header.set("PYWRESZV", zero_var, "PyWiFeS: 2D response zero_var")
     outfits[0].header.set("PYWRESW1", N, "PyWiFeS: 1st Savitzky-Golay window size")
     outfits[0].header.set("PYWRESW2", N * window_factor, "PyWiFeS: 2nd Savitzky-Golay window size")
@@ -3956,6 +3957,9 @@ def derive_wifes_wire_solution(
     ccd_x = numpy.arange(nx, dtype="f")
     # number of groupings to do
     ng = nx // nave - 1
+
+    nwire = f[1].header.get("PYWWIREN", default="Unknown")
+
     if plot:
         wparam = []
     for q in range(nslits):
@@ -4051,6 +4055,7 @@ def derive_wifes_wire_solution(
     results = pyfits.PrimaryHDU(data=ctr_results)
     g = pyfits.HDUList([results])
     g[0].header.set("PYWIFES", __version__, "PyWiFeS version")
+    g[0].header.set("PYWWIREN", nwire, "PyWiFeS: number wire images combined")
     g[0].header.set("PYWWIFZ", ", ".join(str(fz) for fz in fit_zones), "PyWiFeS: wire fit zones")
     g[0].header.set("PYWWIFT", flux_threshold, "PyWiFeS: wire flux_threshold")
     g[0].header.set("PYWWIWPD", wire_polydeg, "PyWiFeS: wire_polydeg")
@@ -4079,6 +4084,7 @@ def generate_wifes_cube(
     wmin_set=None,
     wmax_set=None,
     dw_set=None,
+    wavelength_ref="AIR",
     bin_x=None,
     bin_y=None,
     ny_orig=76,
@@ -4134,9 +4140,27 @@ def generate_wifes_cube(
     frame_wdisps = []
 
     f4 = pyfits.open(wsol_fn)
+    convert_wave = False
+    if wavelength_ref.upper() == "VACUUM":
+        wavelength_ref = "VACUUM"  # Ensure capitalised
+        convert_wave = True
+    else:
+        wavelength_ref = "AIR"
+    kwwavemodel = f4[0].header.get("PYWWAVEM", default="Unknown")
+    kwwaverms = f4[0].header.get("PYWWRMSE", default="Unknown")
+    kwwavenum = f4[0].header.get("PYWARCN", default="Unknown")
+
     for i in range(nslits):
         # Wavelenghts
         wave = f4[i + 1].data
+        if convert_wave:
+            # Remove the vacuum-to-air conversion applied by NIST to arcline
+            # wavelengths. From Peck & Reeder (1972).
+            n = 1.0 + 1E-8 * (
+                8060.51 + 2480990.0 / (132.274 - numpy.float_power(wave / 1E4, -2))
+                + 17455.7 / (39.32957 - numpy.float_power(wave / 1E4, -2))
+            )
+            wave = wave * n
         curr_wmin = numpy.nanmax(numpy.nanmin(wave, axis=1))
         curr_wmax = numpy.nanmin(numpy.nanmax(wave, axis=1))
         curr_wdisp = numpy.abs(numpy.nanmean(wave[:, 1:] - wave[:, :-1]))
@@ -4180,9 +4204,13 @@ def generate_wifes_cube(
         wire_trans = f5[0].data
         if subsample > 1:
             wire_trans = subsample * ndimage.zoom(wire_trans, zoom=[subsample, 1], order=0, mode='nearest', grid_mode=True)
+        kwwiredeg = f5[0].header.get("PYWWIWPD", default="Unknown")
+        kwwirenum = f5[0].header.get("PYWWIREN", default="Unknown")
         f5.close()
     except:
         wire_trans = numpy.zeros([ndy, ndx], dtype="d") + numpy.nanmax(yarr) / 2
+        kwwiredeg = "N/A"
+        kwwirenum = "N/A"
     wire_offset = float(offset_orig) / float(bin_y) * subsample
     ny = int(numpy.ceil(ny_orig / bin_y * subsample))
     nx = int(numpy.ceil(nslits * subsample))
@@ -4240,6 +4268,14 @@ def generate_wifes_cube(
     for i in range(nslits):
         curr_hdu = i + 1
         wave = f4[curr_hdu].data
+        if convert_wave:
+            # Remove the vacuum-to-air conversion applied by NIST to arcline
+            # wavelengths. From Peck & Reeder (1972).
+            n = 1.0 + 1E-8 * (
+                8060.51 + 2480990.0 / (132.274 - numpy.float_power(wave / 1E4, -2))
+                + 17455.7 / (39.32957 - numpy.float_power(wave / 1E4, -2))
+            )
+            wave = wave * n
 
         curr_flux = f3[curr_hdu].data
         curr_var = f3[curr_hdu + nslits].data
@@ -4469,9 +4505,15 @@ def generate_wifes_cube(
         outfits[i + 1 + 2 * nslits].header.set("CDELT1", disp_ave)
         outfits[i + 1 + 2 * nslits].header.set("NAXIS1", len(out_lambda))
     outfits[0].header.set("PYWIFES", __version__, "PyWiFeS version")
+    outfits[0].header.set("PYWWAVEM", kwwavemodel, "PyWiFeS: method for wavelength solution")
+    outfits[0].header.set("PYWWRMSE", kwwaverms, "PyWiFeS: Final RMSE of wavelength solution")
+    outfits[0].header.set("PYWARCN", kwwavenum, "PyWiFeS: number of arc exposures combined")
+    outfits[0].header.set("PYWWIWPD", kwwiredeg, "PyWiFeS: wire_polydeg")
+    outfits[0].header.set("PYWWIREN", kwwirenum, "PyWiFeS: number of wire exposures combined")
     outfits[0].header.set("PYWYORIG", ny_orig, "PyWiFeS: ny_orig")
     outfits[0].header.set("PYWOORIG", offset_orig, "PyWiFeS: offset_orig")
     outfits[0].header.set("PYWADR", adr, "PyWiFeS: ADR correction applied")
+    outfits[0].header.set("PYWWVREF", wavelength_ref, "PyWiFeS: wavelength reference (air or vacuum)")
     if subsample > 1:
         outfits[0].header.set("PYWSSAMP", subsample, "PyWiFeS: wire/ADR spatial subsampling factor")
     outfits.writeto(outimg, overwrite=True)

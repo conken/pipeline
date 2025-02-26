@@ -4,16 +4,9 @@ import scipy.signal
 import scipy.ndimage
 import scipy.interpolate
 
-from pywifes.logger_config import custom_print
-import logging
-
 from pywifes.multiprocessing_utils import get_task, map_tasks
 from pywifes.wifes_imtrans import blkrep, blkavg, transform_data, detransform_data
 from pywifes.wifes_utils import arguments, is_halfframe, is_taros
-
-# Redirect print statements to logger
-logger = logging.getLogger("PyWiFeS")
-print = custom_print(logger)
 
 
 # -----------------------------------------------------------------------------
@@ -182,7 +175,9 @@ def lacos_spec_data(
                 * (numpy.abs(x_mg - bpx) <= n_nx)
                 * (global_bpm == 0)
             )
-            clean_data[bpy, bpx] = numpy.nanmedian(data[n_inds])
+            if n_inds[0].size > 0:
+                clean_data[bpy, bpx] = numpy.nanmedian(data[n_inds])
+
         clean_data[numpy.isnan(clean_data)] = data[numpy.isnan(clean_data)]
 
     # ------------------------------------------------------

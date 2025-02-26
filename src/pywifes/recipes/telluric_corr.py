@@ -4,6 +4,9 @@ from pywifes.wifes_utils import get_primary_sci_obs_list, get_primary_std_obs_li
 from pywifes import wifes_calib
 
 
+# ------------------------------------------------------
+# Apply telluric correction
+# ------------------------------------------------------
 @wifes_recipe
 def _run_telluric_corr(metadata, gargs, prev_suffix, curr_suffix, **args):
     """
