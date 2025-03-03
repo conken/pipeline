@@ -1,11 +1,11 @@
 import os
 from pywifes import pywifes
-from pywifes.wifes_utils import get_primary_sci_obs_list, get_primary_std_obs_list, is_halfframe, is_taros, wifes_recipe
+from pywifes.wifes_utils import (
+    get_primary_sci_obs_list, get_primary_std_obs_list, is_halfframe, is_taros,
+    wifes_recipe
+)
 
 
-# ------------------------------------------------------
-# 3D datacube generation
-# ------------------------------------------------------
 @wifes_recipe
 def _run_save_3dcube(metadata, gargs, prev_suffix, curr_suffix, **args):
     '''
@@ -17,7 +17,7 @@ def _run_save_3dcube(metadata, gargs, prev_suffix, curr_suffix, **args):
     metadata : dict
         Metadata containing information about the observations.
     gargs : dict
-        A dictionary containing global arguments used by the processing steps. 
+        A dictionary containing global arguments used by the processing steps.
     prev_suffix : str
         Previous suffix of the file name (input).
     curr_suffix : str
@@ -43,8 +43,11 @@ def _run_save_3dcube(metadata, gargs, prev_suffix, curr_suffix, **args):
     # Check if is half-frame from the first sci image
     if sci_obs_list:
         sci_filename = gargs['data_dir'] + sci_obs_list[0] + ".fits"
-    else:
+    elif std_obs_list:
         sci_filename = gargs['data_dir'] + std_obs_list[0] + ".fits"
+    else:
+        # no files to process
+        return
 
     halfframe = is_halfframe(sci_filename)
     taros = is_taros(sci_filename)
@@ -67,4 +70,3 @@ def _run_save_3dcube(metadata, gargs, prev_suffix, curr_suffix, **args):
         pywifes.generate_wifes_3dcube(in_fn, out_fn, halfframe=halfframe,
                                       taros=taros, **args)
     return
-

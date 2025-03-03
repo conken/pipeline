@@ -11,7 +11,9 @@ import scipy.interpolate as interp
 from pywifes import wifes_ephemeris
 from pywifes.pywifes import imcopy
 from pywifes.wifes_metadata import metadata_dir, __version__
-from pywifes.wifes_utils import arguments, hl_envelopes_idx, is_halfframe, is_nodshuffle, is_taros
+from pywifes.wifes_utils import (
+    arguments, hl_envelopes_idx, is_halfframe, is_nodshuffle, is_subnodshuffle, is_taros
+)
 
 
 # ------------------------------------------------------------------------
@@ -74,7 +76,7 @@ def find_nearest_stdstar(inimg, data_hdu=0, stdtype="flux"):
     stdtype : str, optional
         Type of standard to find: "flux", "telluric", or "any".
         Default: "flux".
-    
+
     Returns
     -------
     list
@@ -655,7 +657,7 @@ def derive_wifes_calibration(
                 star_name, dist, _ = find_nearest_stdstar(cube_fn_list[i], stdtype="flux")
                 if dist > 200.0:
                     star_name = None
-            except:
+            except Exception:
                 # last resort: use the object name from the fits header
                 # and pray it's correct
                 star_name = cube_hdr["OBJECT"]
@@ -667,7 +669,7 @@ def derive_wifes_calibration(
         else:
             try:
                 secz = cube_hdr["AIRMASS"]
-            except:
+            except Exception:
                 print(
                     "AIRMASS header missing for {:s}".format(
                         cube_fn_list[i].split("/")[-1]
@@ -1067,7 +1069,7 @@ def calibrate_wifes_cube(inimg, outimg, calib_fn, mode="pywifes", extinction_fn=
     exptime = f3[1].header["EXPTIME"]
     try:
         secz = f3[1].header["AIRMASS"]
-    except:
+    except Exception:
         secz = 1.0
         print("AIRMASS keyword not found, assuming airmass=1.0")
     nlam = numpy.shape(f3[1].data)[1]
@@ -1228,7 +1230,7 @@ def derive_wifes_telluric(
                 f = pyfits.open(fn)
                 new_am = float(f[1].header["AIRMASS"])
                 f.close()
-            except:
+            except Exception:
                 new_am = 1.0
                 print("AIRMASS keyword not found, assuming 1.0")
             airmass_list.append(new_am)
@@ -1427,7 +1429,8 @@ def derive_wifes_telluric(
 
 
 def apply_wifes_telluric(inimg, outimg, tellcorr_fn, airmass=None, shift_sky=True,
-                         sky_wmin=7200.0, sky_wmax=8100.0, interactive_plot=False):
+                         sky_wmin=7200.0, sky_wmax=8100.0, save_telluric=False,
+                         interactive_plot=False):
     """
     Apply telluric correction to the input image. The telluric correction is applied
     using the telluric correction file previously obtained in 'derive_wifes_telluric()'.
@@ -1454,6 +1457,9 @@ def apply_wifes_telluric(inimg, outimg, tellcorr_fn, airmass=None, shift_sky=Tru
     sky_wmax : float, optional
         Maximum wavelength to fit if shifting based on sky lines.
         Default: 8100.0.
+    save_telluric : bool, optional
+        Whether to save the applied telluric model in the datacube.
+        Default: False.
     interactive_plot : bool, optional
         Whether to interrupt processing to provide interactive plot to user.
         Default: False.
@@ -1484,8 +1490,12 @@ def apply_wifes_telluric(inimg, outimg, tellcorr_fn, airmass=None, shift_sky=Tru
     else:
         nslits = 25
 
+    # If the sky has been removed, do not attempt to shift the telluric
+    if is_nodshuffle(inimg) or is_subnodshuffle(inimg):
+        shift_sky = False
+
     # ---------------------------------------------
-    # open the telluric corrction file
+    # open the telluric correction file
     f1 = open(tellcorr_fn, "rb")
     tellcorr_info = pickle.load(f1)
     if "tellstd_list" in tellcorr_info:
@@ -1502,7 +1512,7 @@ def apply_wifes_telluric(inimg, outimg, tellcorr_fn, airmass=None, shift_sky=Tru
     try:
         O2_power = tellcorr_info["O2_power"]
         H2O_power = tellcorr_info["H2O_power"]
-    except:
+    except Exception:
         O2_power = 0.55
         H2O_power = 1.0
     if shift_sky:
@@ -1521,7 +1531,7 @@ def apply_wifes_telluric(inimg, outimg, tellcorr_fn, airmass=None, shift_sky=Tru
     if airmass is None:
         try:
             airmass = float(f3[1].header["AIRMASS"])
-        except:
+        except Exception:
             airmass = 1.0
             print("AIRMASS keyword not found, assuming airmass=1.0")
     # get the wavelength array
@@ -1543,6 +1553,13 @@ def apply_wifes_telluric(inimg, outimg, tellcorr_fn, airmass=None, shift_sky=Tru
         base_H2O_corr = H2O_interp(wave_array)
         H2O_corr = base_H2O_corr ** (airmass**H2O_power)
         fcal_array = O2_corr * H2O_corr
+
+    # prepare telluric spectrum if saving
+    if save_telluric:
+        if shift_sky:
+            telldata = numpy.ones((nslits, nlam))
+        else:
+            telldata = numpy.ones(nlam)
 
     # correct the data
     outfits = pyfits.HDUList(f3)
@@ -1574,16 +1591,36 @@ def apply_wifes_telluric(inimg, outimg, tellcorr_fn, airmass=None, shift_sky=Tru
 
             if interactive_plot:
                 plt.plot(targ_wave, targ_sky / numpy.amax(targ_sky), label='Target sky')
-                plt.plot(targ_wave, sky_interp(targ_wave + best_shift * dwave), label='Interpolated telluric sky')
+                plt.plot(targ_wave, sky_interp(targ_wave + best_shift * dwave), label='Interpolated telluric sky (shifted {:.2f} pixels)'.format(best_shift))
                 plt.legend()
                 plt.title(f"{os.path.basename(inimg)} - slit {first + i}")
+                plt.xlabel("Wavelength (A)")
+                plt.ylabel("Normalised Flux")
                 plt.show()
                 plt.close('all')
         out_flux = curr_flux / fcal_array
         out_var = curr_var / (fcal_array**2)
+        if save_telluric:
+            if shift_sky:
+                hcomment = "Applied telluric model (1 row per slit in ascending Y order)"
+                telldata[i, :] = fcal_array
+            elif i == 0:
+                hcomment = "Applied telluric model for all slits"
+                telldata = fcal_array
         # save to data cube
         outfits[curr_hdu].data = out_flux.astype("float32", casting="same_kind")
         outfits[curr_hdu + nslits].data = out_var.astype("float32", casting="same_kind")
+    if save_telluric:
+        if shift_list:
+            if numpy.all(numpy.isclose(shift_list, shift_list[0])):
+                telldata = telldata[0, :]
+                hcomment = "Applied telluric model for all slits"
+        tellext = pyfits.ImageHDU(data=telldata, name="TelluricModel")
+        for kw in ['CTYPE1', 'CUNIT1', 'CRVAL1', 'CDELT1', 'CRPIX1']:
+            if kw in outfits[1].header:
+                tellext.header[kw] = outfits[1].header[kw]
+        tellext.header['COMMENT'] = hcomment
+        outfits.append(tellext)
     outfits[0].header.set("PYWIFES", __version__, "PyWiFeS version")
     outfits[0].header.set("PYWTSTDF", tellstd_list, "PyWiFeS: telluric standard(s)")
     outfits[0].header.set("PYWTO2P", O2_power, "PyWiFeS: telluric O2 power")

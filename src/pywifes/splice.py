@@ -107,7 +107,7 @@ class SingleSpec(object):
 def join_spectra(blueSpec, redSpec, get_dq=False):
 
     if redSpec.min_wl > blueSpec.max_wl:
-        return None, None, None
+        return None, None, None, None
 
     else:
         # Generate the resampling matrices
@@ -134,12 +134,14 @@ def join_spectra(blueSpec, redSpec, get_dq=False):
         flux_B = numpy.array(AB * blueSpec.flux).ravel()
         diag_B = sp.dia_matrix(
             ([blueSpec.fluxvar], [0]), shape=[blue_NAXIS1, blue_NAXIS1]
-        )
+        ).astype(numpy.float64)
         fluxvar_B = numpy.array((AB * diag_B * AB.T).sum(axis=1)).ravel()
 
         # Red
         flux_R = numpy.array(AR * redSpec.flux).ravel()
-        diag_R = sp.dia_matrix(([redSpec.fluxvar], [0]), shape=[red_NAXIS1, red_NAXIS1])
+        diag_R = sp.dia_matrix(
+            ([redSpec.fluxvar], [0]), shape=[red_NAXIS1, red_NAXIS1]
+        ).astype(numpy.float64)
         fluxvar_R = numpy.array((AR * diag_R * AR.T).sum(axis=1)).ravel()
 
         BUFFER = 10.0
@@ -378,7 +380,9 @@ def join_cubes(blue_path, red_path, get_dq=False):
             flux_R = numpy.array(AR * red_flux).ravel()
 
             red_fluxvar = red_fluxvar_cube[:, i, j]
-            diag_R = sp.dia_matrix(([red_fluxvar], [0]), shape=[red_NAXIS1, red_NAXIS1])
+            diag_R = sp.dia_matrix(
+                ([red_fluxvar], [0]), shape=[red_NAXIS1, red_NAXIS1]
+            ).astype(numpy.float64)
             fluxvar_R = numpy.array((AR * diag_R * AR.T).sum(axis=1)).ravel()
 
             # Blue
@@ -388,7 +392,7 @@ def join_cubes(blue_path, red_path, get_dq=False):
             blue_fluxvar = blue_fluxvar_cube[:, i, j]
             diag_B = sp.dia_matrix(
                 ([blue_fluxvar], [0]), shape=[blue_NAXIS1, blue_NAXIS1]
-            )
+            ).astype(numpy.float64)
             fluxvar_B = numpy.array((AB * diag_B * AB.T).sum(axis=1)).ravel()
 
             # Average the two taking into account the buffer region and weighting
@@ -488,16 +492,16 @@ def splice_cubes(blue_path, red_path, output_path, get_dq=False):
         hdulist[0].header["CRPIX3"] = blue_header["CRPIX3"]
         hdulist[0].header["CRVAL3"] = blue_header["CRVAL3"]
         hdulist[0].header["CDELT3"] = blue_header["CDELT3"]
-        hdulist[0].header["CTYPE3"] = "wavelength"
-        hdulist[0].header["CUNIT3"] = "angstrom"
+        hdulist[0].header["CTYPE3"] = "Wavelength"
+        hdulist[0].header["CUNIT3"] = "Angstrom"
 
         hdr_fluxvar = fits.Header()
         hdr_fluxvar["EXTNAME"] = "VAR"
         hdr_fluxvar["CRPIX3"] = blue_header["CRPIX3"]
         hdr_fluxvar["CRVAL3"] = blue_header["CRVAL3"]
         hdr_fluxvar["CDELT3"] = blue_header["CDELT3"]
-        hdr_fluxvar["CTYPE3"] = "wavelength"
-        hdr_fluxvar["CUNIT3"] = "angstrom"
+        hdr_fluxvar["CTYPE3"] = "Wavelength"
+        hdr_fluxvar["CUNIT3"] = "Angstrom"
         hdr_fluxvar["BUNIT"] = "(count / Angstrom)^2"
 
         hdu_fluxvar = fits.ImageHDU(data=fluxVar.astype("float32", casting="same_kind"), header=hdr_fluxvar)
@@ -510,8 +514,8 @@ def splice_cubes(blue_path, red_path, output_path, get_dq=False):
             hdr_dq["CRPIX3"] = blue_header["CRPIX3"]
             hdr_dq["CRVAL3"] = blue_header["CRVAL3"]
             hdr_dq["CDELT3"] = blue_header["CDELT3"]
-            hdr_dq["CTYPE3"] = "wavelength"
-            hdr_dq["CUNIT3"] = "angstrom"
+            hdr_dq["CTYPE3"] = "Wavelength"
+            hdr_dq["CUNIT3"] = "Angstrom"
 
             hdu_dq = fits.ImageHDU(data=dq.astype("int16", casting="unsafe"), header=hdr_dq)
             hdu_dq.scale('int16')

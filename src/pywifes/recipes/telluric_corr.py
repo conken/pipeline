@@ -1,7 +1,7 @@
 import os
-from pywifes import pywifes
-from pywifes import wifes_calib
+
 from pywifes.wifes_utils import get_primary_sci_obs_list, get_primary_std_obs_list, wifes_recipe
+from pywifes import wifes_calib
 
 
 # ------------------------------------------------------
@@ -17,7 +17,7 @@ def _run_telluric_corr(metadata, gargs, prev_suffix, curr_suffix, **args):
     metadata : dict
         Metadata containing information about the observations.
     gargs : dict
-        A dictionary containing global arguments used by the processing steps. 
+        A dictionary containing global arguments used by the processing steps.
     prev_suffix : str
         Previous suffix of the file name (input).
     curr_suffix : str
@@ -34,6 +34,9 @@ def _run_telluric_corr(metadata, gargs, prev_suffix, curr_suffix, **args):
     sky_wmax : float, optional
         Maximum wavelength to fit if shifting based on sky lines.
         Default: 8100.0.
+    save_telluric : bool, optional
+        Whether to save the applied telluric model in the datacube.
+        Default: False.
     interactive_plot : bool, optional
         Whether to interrupt processing to provide interactive plot to user.
         Default: False.
