@@ -1,7 +1,7 @@
 #! /usr/bin/env python3
 
 import argparse
-from astropy.io import fits as pyfits
+import astropy.io.fits as pyfits
 import contextlib
 import datetime
 import glob
@@ -624,7 +624,6 @@ def main():
                         for spliced_spec in spliced_output:
                             if os.path.isfile(spliced_spec):
                                 plot_1D_spectrum(spliced_spec, plot_dir=plot_dir)
-
 
     # ----------------------------------------------------------
     # Print total running time
