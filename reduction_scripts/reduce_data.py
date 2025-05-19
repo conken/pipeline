@@ -60,12 +60,6 @@ def run_arm_indiv(temp_data_dir, obs_metadatas, arm, master_dir, output_master_d
             print("No science, standard, or arc files found in metadata.")
             raise ValueError("No science, standard, or arc files found in metadata.")
 
-        # Check observing mode
-        gargs['obs_mode'] = "classical"
-        if is_nodshuffle(temp_data_dir + reference_filename) \
-                or is_subnodshuffle(temp_data_dir + reference_filename):
-            gargs['obs_mode'] = "ns"
-
         # Check if is half-frame
         halfframe = is_halfframe(temp_data_dir + reference_filename)
         taros = is_taros(temp_data_dir + reference_filename)
@@ -365,6 +359,13 @@ def main():
              "extracting the spectra.",
     )
 
+    # Option to skip processing (and only extract or extract-and-splice)
+    parser.add_argument(
+        "--no-processing",
+        action="store_true",
+        help="Optional: Skip processing and only extract or extract-and-splice",
+    )
+
     args = parser.parse_args()
 
     # Validate and process the user_data_dir
@@ -414,87 +415,91 @@ def main():
     # Auto-extract AND splice the datacubes
     extract_and_splice = args.extract_and_splice
 
+    # Skip processing and only extract or extract-and-splice
+    no_processing = args.no_processing
+
     # Set paths
     working_dir = os.getcwd()
-
-    # Creates a temporary data directory containning all raw data for reduction.
-    temp_data_dir = os.path.join(working_dir, "data_products/intermediate/raw_data_temp/")
-    os.makedirs(temp_data_dir, exist_ok=True)
-
-    all_fits_names = get_file_names(user_data_dir, "*.fits*")
-    # Copy raw data from user's direcory into temporaty raw directory.
-    # TODO: Copying files to a user dir should be optional (adds extra time)
-    copy_files(user_data_dir, temp_data_dir, all_fits_names)
 
     # Creates a directory for plot.
     plot_dir = os.path.join(working_dir, "data_products/plots/")
     os.makedirs(plot_dir, exist_ok=True)
 
-    # Classify all raw data (red and blue arm)
-    mode_save_fn = os.path.join(working_dir, "data_products/coadd_mode.json5")
-    obs_metadatas = classify(temp_data_dir,
-                             greedy_stds=args.greedy_stds,
-                             coadd_mode=args.coadd_mode,
-                             mode_save_fn=mode_save_fn)
+    # Creates a temporary data directory containning all raw data for reduction.
+    if not no_processing:
+        temp_data_dir = os.path.join(working_dir, "data_products/intermediate/raw_data_temp/")
+        os.makedirs(temp_data_dir, exist_ok=True)
 
-    # Set grism_key dictionary due to different keyword names for red and blue arms.
-    grism_key = {
-        "blue": "GRATINGB",
-        "red": "GRATINGR",
-    }
+        all_fits_names = get_file_names(user_data_dir, "*.fits*")
+        # Copy raw data from user's direcory into temporaty raw directory.
+        # TODO: Copying files to a user dir should be optional (adds extra time)
+        copy_files(user_data_dir, temp_data_dir, all_fits_names)
 
-    # Set the directory for master calibration files (default is ./data_products/master_calib/)
-    # Define a list of steps to skip if the reduction is being performed
-    # using master calibration files
-    if from_master:
-        master_dir = os.path.abspath(from_master)
-        output_master_dir = os.path.join(working_dir, "data_products/master_calib/")
-        os.makedirs(output_master_dir, exist_ok=True)
-        extra_skip_steps = [
-            "superbias",
-            "superflat",
-            "slitlet_profile",
-            "flat_cleanup",
-            "superflat_mef",
-            "wave_soln",
-            "wire_soln",
-            "flat_response",
-        ]
+        # Classify all raw data (red and blue arm)
+        mode_save_fn = os.path.join(working_dir, "data_products/coadd_mode.json5")
+        obs_metadatas = classify(temp_data_dir,
+                                 greedy_stds=args.greedy_stds,
+                                 coadd_mode=args.coadd_mode,
+                                 mode_save_fn=mode_save_fn)
 
-    else:
-        # Master calibration files firectory
-        master_dir = os.path.join(working_dir, "data_products/master_calib/")
-        os.makedirs(master_dir, exist_ok=True)
-        output_master_dir = ""
-        # No extra skiped steps in principal.
-        extra_skip_steps = []
+        # Set grism_key dictionary due to different keyword names for red and blue arms.
+        grism_key = {
+            "blue": "GRATINGB",
+            "red": "GRATINGR",
+        }
 
-    print(f"Processing using master calibrations {'to' if just_calib else 'from'}: '{master_dir}'.")
+        # Set the directory for master calibration files (default is ./data_products/master_calib/)
+        # Define a list of steps to skip if the reduction is being performed
+        # using master calibration files
+        if from_master:
+            master_dir = os.path.abspath(from_master)
+            output_master_dir = os.path.join(working_dir, "data_products/master_calib/")
+            os.makedirs(output_master_dir, exist_ok=True)
+            extra_skip_steps = [
+                "superbias",
+                "superflat",
+                "slitlet_profile",
+                "flat_cleanup",
+                "superflat_mef",
+                "wave_soln",
+                "wire_soln",
+                "flat_response",
+            ]
 
-    manager = multiprocessing.Manager()
-    return_dict = manager.dict()
-    jobs = []
-    if args.reduce_both:
-        # Try and reduce both arms at the same time
-        for arm in obs_metadatas.keys():
-            p = multiprocessing.Process(target=run_arm_indiv, args=(temp_data_dir, obs_metadatas, arm, master_dir, output_master_dir, working_dir, params_path, grism_key, just_calib, plot_dir, from_master, extra_skip_steps, return_dict, skip_done))
-            jobs.append(p)
-            p.start()
+        else:
+            # Master calibration files firectory
+            master_dir = os.path.join(working_dir, "data_products/master_calib/")
+            os.makedirs(master_dir, exist_ok=True)
+            output_master_dir = ""
+            # No extra skiped steps in principal.
+            extra_skip_steps = []
 
-        for proc in jobs:
-            proc.join()
-    else:
-        # Otherwise reduce them sequentially
-        for arm in obs_metadatas.keys():
-            p = multiprocessing.Process(target=run_arm_indiv, args=(temp_data_dir, obs_metadatas, arm, master_dir, output_master_dir, working_dir, params_path, grism_key, just_calib, plot_dir, from_master, extra_skip_steps, return_dict, skip_done))
-            jobs.append(p)
-            p.start()
+        print(f"Processing using master calibrations {'to' if just_calib else 'from'}: '{master_dir}'.")
+
+        manager = multiprocessing.Manager()
+        return_dict = manager.dict()
+        jobs = []
+        if args.reduce_both:
+            # Try and reduce both arms at the same time
+            for arm in obs_metadatas.keys():
+                p = multiprocessing.Process(target=run_arm_indiv, args=(temp_data_dir, obs_metadatas, arm, master_dir, output_master_dir, working_dir, params_path, grism_key, just_calib, plot_dir, from_master, extra_skip_steps, return_dict, skip_done))
+                jobs.append(p)
+                p.start()
 
             for proc in jobs:
                 proc.join()
+        else:
+            # Otherwise reduce them sequentially
+            for arm in obs_metadatas.keys():
+                p = multiprocessing.Process(target=run_arm_indiv, args=(temp_data_dir, obs_metadatas, arm, master_dir, output_master_dir, working_dir, params_path, grism_key, just_calib, plot_dir, from_master, extra_skip_steps, return_dict, skip_done))
+                jobs.append(p)
+                p.start()
 
-    # Delete temporary directory containing raw data.
-    shutil.rmtree(temp_data_dir)
+                for proc in jobs:
+                    proc.join()
+
+        # Delete temporary directory containing raw data.
+        shutil.rmtree(temp_data_dir)
 
     # ----------------------------------------------------------
     # Move reduce cube to the data_products directory
@@ -503,19 +508,20 @@ def main():
         print("Only basics master calibration files have been produced.")
     else:
         destination_dir = os.path.join(working_dir, "data_products")
-        print(f"Moving reduced 3D cubes to {destination_dir}.")
+        if not no_processing:
+            print(f"Moving reduced 3D cubes to {destination_dir}.")
 
-        # Red
-        red_cubes_path = os.path.join(working_dir, "data_products/intermediate/red/")
-        red_cubes_file_name = get_file_names(red_cubes_path, "*.cube.fits")
-        # Move reduced cubes to the data_product
-        move_files(red_cubes_path, destination_dir, red_cubes_file_name)
+            # Red
+            red_cubes_path = os.path.join(working_dir, "data_products/intermediate/red/")
+            red_cubes_file_name = get_file_names(red_cubes_path, "*.cube.fits")
+            # Move reduced cubes to the data_product
+            move_files(red_cubes_path, destination_dir, red_cubes_file_name)
 
-        # Blue
-        blue_cubes_path = os.path.join(working_dir, "data_products/intermediate/blue/")
-        blue_cubes_file_name = get_file_names(blue_cubes_path, "*.cube.fits")
-        # Move reduced cubes to the data_product
-        move_files(blue_cubes_path, destination_dir, blue_cubes_file_name)
+            # Blue
+            blue_cubes_path = os.path.join(working_dir, "data_products/intermediate/blue/")
+            blue_cubes_file_name = get_file_names(blue_cubes_path, "*.cube.fits")
+            # Move reduced cubes to the data_product
+            move_files(blue_cubes_path, destination_dir, blue_cubes_file_name)
 
         if extract or extract_and_splice:
             # ----------------------------------------------------------
@@ -565,7 +571,7 @@ def main():
                         blue_cube_path,
                         red_cube_path,
                         destination_dir,
-                        sky_sub=False if (ns or subns) else True,
+                        ns=ns,
                         subns=subns,
                         plot_path=plot_path,
                         **extract_args['detext_args'],
@@ -616,7 +622,12 @@ def main():
                         spliced_cube_path = os.path.join(destination_dir, spliced_cube_name)
 
                         # Splice cubes
-                        splice_cubes(match_cubes["Blue"], match_cubes["Red"], spliced_cube_path, **extract_args['splice_args'])
+                        if os.path.isfile(spliced_cube_path) and \
+                            os.path.getmtime(blue_cube_path) < os.path.getmtime(spliced_cube_path) and \
+                                os.path.getmtime(red_cube_path) < os.path.getmtime(spliced_cube_path):
+                            print(f"Skipping splicing of cube {spliced_cube_name}. Output newer than input.")
+                        else:
+                            splice_cubes(match_cubes["Blue"], match_cubes["Red"], spliced_cube_path, **extract_args['splice_args'])
 
                         # Find blue spectra files matching the pattern 'xxx-Blue-UTxxx.spec.det*'
                         pattern_blue = os.path.join(
@@ -647,7 +658,12 @@ def main():
                             spliced_output.append(os.path.join(
                                 working_dir, destination_dir, spliced_spectrum_name
                             ))
-                            splice_spectra(blue_spec, red_spec, spliced_output[-1], **extract_args['splice_args'])
+                            if os.path.isfile(spliced_output[-1]) and \
+                                os.path.getmtime(blue_spec) < os.path.getmtime(spliced_output[-1]) and \
+                                    os.path.getmtime(red_spec) < os.path.getmtime(spliced_output[-1]):
+                                print(f"Skipping splicing of spectrum {spliced_output[-1]}. Output newer than input.")
+                            else:
+                                splice_spectra(blue_spec, red_spec, spliced_output[-1], **extract_args['splice_args'])
 
                     # Plot extracted spectra:
                     if extract_args["plot"]:
